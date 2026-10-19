@@ -92,7 +92,6 @@ SIMPLE_OPS_LIST = [
     aten.diagonal,
     aten.expand,
     aten.unsqueeze,
-    aten.unsqueeze_,
     aten.mean,
     aten.sum,
     aten.clone,
@@ -116,6 +115,39 @@ SIMPLE_OPS_LIST = [
 
 for simple_op in SIMPLE_OPS_LIST:
     globals()[_get_func_name(simple_op)] = register_simple(simple_op)
+
+
+def register_inplace_view(op: OpType) -> Callable[..., Any]:
+    """Register an in-place view op, which must also update the wrapper's own metadata."""
+
+    def impl(self: ComplexTensor, *args: Any, **kwargs: Any) -> ComplexTensor:
+        re = op(self.re, *args, **kwargs)
+        op(self.im, *args, **kwargs)
+        # Autograd returns `self` for in-place ops, so its sizes/strides must match `re`'s.
+        python_key = torch._C.DispatchKeySet(torch._C.DispatchKey.Python)
+        with torch._C._ExcludeDispatchKeyGuard(python_key):
+            aten.as_strided_(self, re.shape, re.stride(), re.storage_offset())
+        return self
+
+    func_name = _get_func_name(op)
+    impl.__name__ = func_name
+    impl.__qualname__ = func_name
+
+    return register_complex(op, impl)
+
+
+INPLACE_VIEW_OPS = [
+    aten.unsqueeze_,
+    aten.squeeze_,
+    aten.transpose_,
+    aten.t_,
+    aten.as_strided_,
+]
+
+for inplace_view_op in INPLACE_VIEW_OPS:
+    globals()[_get_func_name(inplace_view_op)] = register_inplace_view(inplace_view_op)
+
+del inplace_view_op
 
 # TODO (hameerabbasi): Not being tested
 SIMPLE_FORCE_TESTED_OPS = [
@@ -141,13 +173,7 @@ for simple_op in SIMPLE_FORCE_TESTED_OPS:
 
 del simple_op
 
-INDUCTOR_OPS = [
-    aten.stft,
-    aten.istft,
-]
-INDUCTOR_OPS.extend(
-    getattr(aten, op) for op in aten if op.startswith(("fft_", "_fft_"))
-)
+INDUCTOR_OPS = [getattr(aten, op) for op in aten if op.startswith(("fft_", "_fft_"))]
 
 for inductor_op in INDUCTOR_OPS:
     globals()[_get_func_name(inductor_op)] = register_force_test(
